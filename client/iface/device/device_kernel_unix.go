@@ -9,15 +9,18 @@ import (
 
 	"github.com/pion/transport/v3"
 	log "github.com/sirupsen/logrus"
+	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/netbirdio/netbird/client/iface/bind"
 	"github.com/netbirdio/netbird/client/iface/configurer"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
 	"github.com/netbirdio/netbird/sharedsock"
 )
 
 type TunKernelDevice struct {
 	name         string
-	address      WGAddress
+	address      wgaddr.Address
 	wgPort       int
 	key          string
 	mtu          int
@@ -32,7 +35,7 @@ type TunKernelDevice struct {
 	filterFn bind.FilterFn
 }
 
-func NewKernelDevice(name string, address WGAddress, wgPort int, key string, mtu int, transportNet transport.Net) *TunKernelDevice {
+func NewKernelDevice(name string, address wgaddr.Address, wgPort int, key string, mtu int, transportNet transport.Net) *TunKernelDevice {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TunKernelDevice{
 		ctx:          ctx,
@@ -97,9 +100,10 @@ func (t *TunKernelDevice) Up() (*bind.UniversalUDPMuxDefault, error) {
 		return nil, err
 	}
 	bindParams := bind.UniversalUDPMuxParams{
-		UDPConn:  rawSock,
-		Net:      t.transportNet,
-		FilterFn: t.filterFn,
+		UDPConn:   rawSock,
+		Net:       t.transportNet,
+		FilterFn:  t.filterFn,
+		WGAddress: t.address,
 	}
 	mux := bind.NewUniversalUDPMuxDefault(bindParams)
 	go mux.ReadFromConn(t.ctx)
@@ -110,7 +114,7 @@ func (t *TunKernelDevice) Up() (*bind.UniversalUDPMuxDefault, error) {
 	return t.udpMux, nil
 }
 
-func (t *TunKernelDevice) UpdateAddr(address WGAddress) error {
+func (t *TunKernelDevice) UpdateAddr(address wgaddr.Address) error {
 	t.address = address
 	return t.assignAddr()
 }
@@ -143,12 +147,17 @@ func (t *TunKernelDevice) Close() error {
 	return closErr
 }
 
-func (t *TunKernelDevice) WgAddress() WGAddress {
+func (t *TunKernelDevice) WgAddress() wgaddr.Address {
 	return t.address
 }
 
 func (t *TunKernelDevice) DeviceName() string {
 	return t.name
+}
+
+// Device returns the wireguard device, not applicable for kernel devices
+func (t *TunKernelDevice) Device() *device.Device {
+	return nil
 }
 
 func (t *TunKernelDevice) FilteredDevice() *FilteredDevice {
@@ -158,4 +167,8 @@ func (t *TunKernelDevice) FilteredDevice() *FilteredDevice {
 // assignAddr Adds IP address to the tunnel interface
 func (t *TunKernelDevice) assignAddr() error {
 	return t.link.assignAddr(t.address)
+}
+
+func (t *TunKernelDevice) GetNet() *netstack.Net {
+	return nil
 }

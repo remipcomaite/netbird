@@ -31,20 +31,15 @@ type ICEConnInfo struct {
 	RelayedOnLocal             bool
 }
 
-type WorkerICECallbacks struct {
-	OnConnReady     func(ConnPriority, ICEConnInfo)
-	OnStatusChanged func(ConnStatus)
-}
-
 type WorkerICE struct {
 	ctx               context.Context
 	log               *log.Entry
 	config            ConnConfig
+	conn              *Conn
 	signaler          *Signaler
 	iFaceDiscover     stdnet.ExternalIFaceDiscover
 	statusRecorder    *Status
 	hasRelayOnLocally bool
-	conn              WorkerICECallbacks
 
 	agent    *ice.Agent
 	muxAgent sync.Mutex
@@ -60,16 +55,16 @@ type WorkerICE struct {
 	lastKnownState ice.ConnectionState
 }
 
-func NewWorkerICE(ctx context.Context, log *log.Entry, config ConnConfig, signaler *Signaler, ifaceDiscover stdnet.ExternalIFaceDiscover, statusRecorder *Status, hasRelayOnLocally bool, callBacks WorkerICECallbacks) (*WorkerICE, error) {
+func NewWorkerICE(ctx context.Context, log *log.Entry, config ConnConfig, conn *Conn, signaler *Signaler, ifaceDiscover stdnet.ExternalIFaceDiscover, statusRecorder *Status, hasRelayOnLocally bool) (*WorkerICE, error) {
 	w := &WorkerICE{
 		ctx:               ctx,
 		log:               log,
 		config:            config,
+		conn:              conn,
 		signaler:          signaler,
 		iFaceDiscover:     ifaceDiscover,
 		statusRecorder:    statusRecorder,
 		hasRelayOnLocally: hasRelayOnLocally,
-		conn:              callBacks,
 	}
 
 	localUfrag, localPwd, err := icemaker.GenerateICECredentials()
@@ -154,8 +149,8 @@ func (w *WorkerICE) OnNewOffer(remoteOfferAnswer *OfferAnswer) {
 		Relayed:                    isRelayed(pair),
 		RelayedOnLocal:             isRelayCandidate(pair.Local),
 	}
-	w.log.Debugf("on ICE conn read to use ready")
-	go w.conn.OnConnReady(selectedPriority(pair), ci)
+	w.log.Debugf("on ICE conn is ready to use")
+	go w.conn.onICEConnectionIsReady(selectedPriority(pair), ci)
 }
 
 // OnRemoteCandidate Handles ICE connection Candidate provided by the remote peer.
@@ -220,7 +215,7 @@ func (w *WorkerICE) reCreateAgent(agentCancel context.CancelFunc, candidates []i
 		case ice.ConnectionStateFailed, ice.ConnectionStateDisconnected:
 			if w.lastKnownState != ice.ConnectionStateDisconnected {
 				w.lastKnownState = ice.ConnectionStateDisconnected
-				w.conn.OnStatusChanged(StatusDisconnected)
+				w.conn.onICEStateDisconnected()
 			}
 			w.closeAgent(agentCancel)
 		default:
@@ -363,6 +358,12 @@ func extraSrflxCandidate(candidate ice.Candidate) (*ice.CandidateServerReflexive
 }
 
 func candidateViaRoutes(candidate ice.Candidate, clientRoutes route.HAMap) bool {
+	addr, err := netip.ParseAddr(candidate.Address())
+	if err != nil {
+		log.Errorf("Failed to parse IP address %s: %v", candidate.Address(), err)
+		return false
+	}
+
 	var routePrefixes []netip.Prefix
 	for _, routes := range clientRoutes {
 		if len(routes) > 0 && routes[0] != nil {
@@ -370,14 +371,8 @@ func candidateViaRoutes(candidate ice.Candidate, clientRoutes route.HAMap) bool 
 		}
 	}
 
-	addr, err := netip.ParseAddr(candidate.Address())
-	if err != nil {
-		log.Errorf("Failed to parse IP address %s: %v", candidate.Address(), err)
-		return false
-	}
-
 	for _, prefix := range routePrefixes {
-		// default route is
+		// default route is handled by route exclusion / ip rules
 		if prefix.Bits() == 0 {
 			continue
 		}

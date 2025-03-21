@@ -7,50 +7,47 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/netbirdio/netbird/management/server"
 	"github.com/netbirdio/netbird/management/server/account"
+	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/http/api"
-	"github.com/netbirdio/netbird/management/server/http/configs"
 	"github.com/netbirdio/netbird/management/server/http/util"
-	"github.com/netbirdio/netbird/management/server/jwtclaims"
+	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/status"
 	"github.com/netbirdio/netbird/management/server/types"
 )
 
 // handler is a handler that handles the server.Account HTTP endpoints
 type handler struct {
-	accountManager  server.AccountManager
-	claimsExtractor *jwtclaims.ClaimsExtractor
+	accountManager  account.Manager
+	settingsManager settings.Manager
 }
 
-func AddEndpoints(accountManager server.AccountManager, authCfg configs.AuthCfg, router *mux.Router) {
-	accountsHandler := newHandler(accountManager, authCfg)
+func AddEndpoints(accountManager account.Manager, settingsManager settings.Manager, router *mux.Router) {
+	accountsHandler := newHandler(accountManager, settingsManager)
 	router.HandleFunc("/accounts/{accountId}", accountsHandler.updateAccount).Methods("PUT", "OPTIONS")
 	router.HandleFunc("/accounts/{accountId}", accountsHandler.deleteAccount).Methods("DELETE", "OPTIONS")
 	router.HandleFunc("/accounts", accountsHandler.getAllAccounts).Methods("GET", "OPTIONS")
 }
 
 // newHandler creates a new handler HTTP handler
-func newHandler(accountManager server.AccountManager, authCfg configs.AuthCfg) *handler {
+func newHandler(accountManager account.Manager, settingsManager settings.Manager) *handler {
 	return &handler{
-		accountManager: accountManager,
-		claimsExtractor: jwtclaims.NewClaimsExtractor(
-			jwtclaims.WithAudience(authCfg.Audience),
-			jwtclaims.WithUserIDClaim(authCfg.UserIDClaim),
-		),
+		accountManager:  accountManager,
+		settingsManager: settingsManager,
 	}
 }
 
 // getAllAccounts is HTTP GET handler that returns a list of accounts. Effectively returns just a single account.
 func (h *handler) getAllAccounts(w http.ResponseWriter, r *http.Request) {
-	claims := h.claimsExtractor.FromRequestContext(r)
-	accountID, userID, err := h.accountManager.GetAccountIDFromToken(r.Context(), claims)
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
 		return
 	}
 
-	settings, err := h.accountManager.GetAccountSettings(r.Context(), accountID, userID)
+	accountID, userID := userAuth.AccountId, userAuth.UserId
+
+	settings, err := h.settingsManager.GetSettings(r.Context(), accountID, userID)
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
 		return
@@ -62,12 +59,13 @@ func (h *handler) getAllAccounts(w http.ResponseWriter, r *http.Request) {
 
 // updateAccount is HTTP PUT handler that updates the provided account. Updates only account settings (server.Settings)
 func (h *handler) updateAccount(w http.ResponseWriter, r *http.Request) {
-	claims := h.claimsExtractor.FromRequestContext(r)
-	_, userID, err := h.accountManager.GetAccountIDFromToken(r.Context(), claims)
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
 		return
 	}
+
+	_, userID := userAuth.AccountId, userAuth.UserId
 
 	vars := mux.Vars(r)
 	accountID := vars["accountId"]
@@ -93,7 +91,11 @@ func (h *handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Settings.Extra != nil {
-		settings.Extra = &account.ExtraSettings{PeerApprovalEnabled: *req.Settings.Extra.PeerApprovalEnabled}
+		settings.Extra = &types.ExtraSettings{
+			PeerApprovalEnabled:      req.Settings.Extra.PeerApprovalEnabled,
+			FlowEnabled:              req.Settings.Extra.NetworkTrafficLogsEnabled,
+			FlowPacketCounterEnabled: req.Settings.Extra.NetworkTrafficPacketCounterEnabled,
+		}
 	}
 
 	if req.Settings.JwtGroupsEnabled != nil {
@@ -125,7 +127,12 @@ func (h *handler) updateAccount(w http.ResponseWriter, r *http.Request) {
 
 // deleteAccount is a HTTP DELETE handler to delete an account
 func (h *handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
-	claims := h.claimsExtractor.FromRequestContext(r)
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
+	if err != nil {
+		util.WriteError(r.Context(), err, w)
+		return
+	}
+
 	vars := mux.Vars(r)
 	targetAccountID := vars["accountId"]
 	if len(targetAccountID) == 0 {
@@ -133,7 +140,7 @@ func (h *handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.accountManager.DeleteAccount(r.Context(), targetAccountID, claims.UserId)
+	err = h.accountManager.DeleteAccount(r.Context(), targetAccountID, userAuth.UserId)
 	if err != nil {
 		util.WriteError(r.Context(), err, w)
 		return
@@ -162,7 +169,11 @@ func toAccountResponse(accountID string, settings *types.Settings) *api.Account 
 	}
 
 	if settings.Extra != nil {
-		apiSettings.Extra = &api.AccountExtraSettings{PeerApprovalEnabled: &settings.Extra.PeerApprovalEnabled}
+		apiSettings.Extra = &api.AccountExtraSettings{
+			PeerApprovalEnabled:                settings.Extra.PeerApprovalEnabled,
+			NetworkTrafficLogsEnabled:          settings.Extra.FlowEnabled,
+			NetworkTrafficPacketCounterEnabled: settings.Extra.FlowPacketCounterEnabled,
+		}
 	}
 
 	return &api.Account{

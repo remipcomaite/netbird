@@ -10,22 +10,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 
+	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/http/api"
-	"github.com/netbirdio/netbird/management/server/jwtclaims"
 	"github.com/netbirdio/netbird/management/server/mock_server"
+	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/status"
 	"github.com/netbirdio/netbird/management/server/types"
 )
 
-func initAccountsTestData(account *types.Account, admin *types.User) *handler {
+func initAccountsTestData(t *testing.T, account *types.Account) *handler {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	settingsMockManager := settings.NewMockManager(ctrl)
+	settingsMockManager.EXPECT().
+		GetSettings(gomock.Any(), account.Id, "test_user").
+		Return(account.Settings, nil).
+		AnyTimes()
+
 	return &handler{
 		accountManager: &mock_server.MockAccountManager{
-			GetAccountIDFromTokenFunc: func(ctx context.Context, claims jwtclaims.AuthorizationClaims) (string, string, error) {
-				return account.Id, admin.Id, nil
-			},
 			GetAccountSettingsFunc: func(ctx context.Context, accountID string, userID string) (*types.Settings, error) {
 				return account.Settings, nil
 			},
@@ -44,15 +51,7 @@ func initAccountsTestData(account *types.Account, admin *types.User) *handler {
 				return accCopy, nil
 			},
 		},
-		claimsExtractor: jwtclaims.NewClaimsExtractor(
-			jwtclaims.WithFromRequestContext(func(r *http.Request) jwtclaims.AuthorizationClaims {
-				return jwtclaims.AuthorizationClaims{
-					UserId:    "test_user",
-					Domain:    "hotmail.com",
-					AccountId: "test_account",
-				}
-			}),
-		),
+		settingsManager: settingsMockManager,
 	}
 }
 
@@ -63,7 +62,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 	sr := func(v string) *string { return &v }
 	br := func(v bool) *bool { return &v }
 
-	handler := initAccountsTestData(&types.Account{
+	handler := initAccountsTestData(t, &types.Account{
 		Id:      accountID,
 		Domain:  "hotmail.com",
 		Network: types.NewNetwork(),
@@ -75,7 +74,7 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 			PeerLoginExpiration:        time.Hour,
 			RegularUsersViewBlocked:    true,
 		},
-	}, adminUser)
+	})
 
 	tt := []struct {
 		name             string
@@ -191,6 +190,11 @@ func TestAccounts_AccountsHandler(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.requestType, tc.requestPath, tc.requestBody)
+			req = nbcontext.SetUserAuthInRequest(req, nbcontext.UserAuth{
+				UserId:    adminUser.Id,
+				AccountId: accountID,
+				Domain:    "hotmail.com",
+			})
 
 			router := mux.NewRouter()
 			router.HandleFunc("/api/accounts", handler.getAllAccounts).Methods("GET")

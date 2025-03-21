@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -20,9 +21,10 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/netbirdio/netbird/encryption"
-	"github.com/netbirdio/netbird/formatter"
+	"github.com/netbirdio/netbird/formatter/hook"
 	mgmtProto "github.com/netbirdio/netbird/management/proto"
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/integrations/port_forwarding"
 	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
@@ -94,7 +96,7 @@ func Test_SyncProtocol(t *testing.T) {
 	mgmtServer, _, mgmtAddr, cleanup, err := startManagementForTest(t, "testdata/store_with_expired_peers.sql", &Config{
 		Stuns: []*Host{{
 			Proto: "udp",
-			URI:   "stun:stun.wiretrustee.com:3468",
+			URI:   "stun:stun.netbird.io:3468",
 		}},
 		TURNConfig: &TURNConfig{
 			TimeBasedCredentials: false,
@@ -102,12 +104,12 @@ func Test_SyncProtocol(t *testing.T) {
 			Secret:               "whatever",
 			Turns: []*Host{{
 				Proto: "udp",
-				URI:   "turn:stun.wiretrustee.com:3468",
+				URI:   "turn:stun.netbird.io:3468",
 			}},
 		},
 		Signal: &Host{
 			Proto: "http",
-			URI:   "signal.wiretrustee.com:10000",
+			URI:   "signal.netbird.io:10000",
 		},
 		Datadir:    dir,
 		HttpConfig: nil,
@@ -173,64 +175,64 @@ func Test_SyncProtocol(t *testing.T) {
 		return
 	}
 
-	wiretrusteeConfig := syncResp.GetWiretrusteeConfig()
-	if wiretrusteeConfig == nil {
-		t.Fatal("expecting SyncResponse to have non-nil WiretrusteeConfig")
+	netbirdConfig := syncResp.GetNetbirdConfig()
+	if netbirdConfig == nil {
+		t.Fatal("expecting SyncResponse to have non-nil NetbirdConfig")
 	}
 
-	if wiretrusteeConfig.GetSignal() == nil {
-		t.Fatal("expecting SyncResponse to have WiretrusteeConfig with non-nil Signal config")
+	if netbirdConfig.GetSignal() == nil {
+		t.Fatal("expecting SyncResponse to have NetbirdConfig with non-nil Signal config")
 	}
 
 	expectedSignalConfig := &mgmtProto.HostConfig{
-		Uri:      "signal.wiretrustee.com:10000",
+		Uri:      "signal.netbird.io:10000",
 		Protocol: mgmtProto.HostConfig_HTTP,
 	}
 
-	if wiretrusteeConfig.GetSignal().GetUri() != expectedSignalConfig.GetUri() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected Signal URI: %v, actual: %v",
+	if netbirdConfig.GetSignal().GetUri() != expectedSignalConfig.GetUri() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected Signal URI: %v, actual: %v",
 			expectedSignalConfig.GetUri(),
-			wiretrusteeConfig.GetSignal().GetUri())
+			netbirdConfig.GetSignal().GetUri())
 	}
 
-	if wiretrusteeConfig.GetSignal().GetProtocol() != expectedSignalConfig.GetProtocol() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected Signal Protocol: %v, actual: %v",
+	if netbirdConfig.GetSignal().GetProtocol() != expectedSignalConfig.GetProtocol() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected Signal Protocol: %v, actual: %v",
 			expectedSignalConfig.GetProtocol().String(),
-			wiretrusteeConfig.GetSignal().GetProtocol())
+			netbirdConfig.GetSignal().GetProtocol())
 	}
 
 	expectedStunsConfig := &mgmtProto.HostConfig{
-		Uri:      "stun:stun.wiretrustee.com:3468",
+		Uri:      "stun:stun.netbird.io:3468",
 		Protocol: mgmtProto.HostConfig_UDP,
 	}
 
-	if wiretrusteeConfig.GetStuns()[0].GetUri() != expectedStunsConfig.GetUri() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected STUN URI: %v, actual: %v",
+	if netbirdConfig.GetStuns()[0].GetUri() != expectedStunsConfig.GetUri() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected STUN URI: %v, actual: %v",
 			expectedStunsConfig.GetUri(),
-			wiretrusteeConfig.GetStuns()[0].GetUri())
+			netbirdConfig.GetStuns()[0].GetUri())
 	}
 
-	if wiretrusteeConfig.GetStuns()[0].GetProtocol() != expectedStunsConfig.GetProtocol() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected STUN Protocol: %v, actual: %v",
+	if netbirdConfig.GetStuns()[0].GetProtocol() != expectedStunsConfig.GetProtocol() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected STUN Protocol: %v, actual: %v",
 			expectedStunsConfig.GetProtocol(),
-			wiretrusteeConfig.GetStuns()[0].GetProtocol())
+			netbirdConfig.GetStuns()[0].GetProtocol())
 	}
 
 	expectedTRUNHost := &mgmtProto.HostConfig{
-		Uri:      "turn:stun.wiretrustee.com:3468",
+		Uri:      "turn:stun.netbird.io:3468",
 		Protocol: mgmtProto.HostConfig_UDP,
 	}
 
-	if wiretrusteeConfig.GetTurns()[0].GetHostConfig().GetUri() != expectedTRUNHost.GetUri() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected TURN URI: %v, actual: %v",
+	if netbirdConfig.GetTurns()[0].GetHostConfig().GetUri() != expectedTRUNHost.GetUri() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected TURN URI: %v, actual: %v",
 			expectedTRUNHost.GetUri(),
-			wiretrusteeConfig.GetTurns()[0].GetHostConfig().GetUri())
+			netbirdConfig.GetTurns()[0].GetHostConfig().GetUri())
 	}
 
-	if wiretrusteeConfig.GetTurns()[0].GetHostConfig().GetProtocol() != expectedTRUNHost.GetProtocol() {
-		t.Fatalf("expecting SyncResponse to have WiretrusteeConfig with expected TURN Protocol: %v, actual: %v",
+	if netbirdConfig.GetTurns()[0].GetHostConfig().GetProtocol() != expectedTRUNHost.GetProtocol() {
+		t.Fatalf("expecting SyncResponse to have NetbirdConfig with expected TURN Protocol: %v, actual: %v",
 			expectedTRUNHost.GetProtocol().String(),
-			wiretrusteeConfig.GetTurns()[0].GetHostConfig().GetProtocol())
+			netbirdConfig.GetTurns()[0].GetHostConfig().GetProtocol())
 	}
 
 	// ensure backward compatibility
@@ -285,13 +287,13 @@ func loginPeerWithValidSetupKey(key wgtypes.Key, client mgmtProto.ManagementServ
 	}
 
 	meta := &mgmtProto.PeerSystemMeta{
-		Hostname:           key.PublicKey().String(),
-		GoOS:               runtime.GOOS,
-		OS:                 runtime.GOOS,
-		Core:               "core",
-		Platform:           "platform",
-		Kernel:             "kernel",
-		WiretrusteeVersion: "",
+		Hostname:       key.PublicKey().String(),
+		GoOS:           runtime.GOOS,
+		OS:             runtime.GOOS,
+		Core:           "core",
+		Platform:       "platform",
+		Kernel:         "kernel",
+		NetbirdVersion: "",
 	}
 	message, err := encryption.EncryptMessage(*serverKey, key, &mgmtProto.LoginRequest{SetupKey: TestValidSetupKey, Meta: meta})
 	if err != nil {
@@ -424,23 +426,32 @@ func startManagementForTest(t *testing.T, testFile string, config *Config) (*grp
 	peersUpdateManager := NewPeersUpdateManager(nil)
 	eventStore := &activity.InMemoryEventStore{}
 
-	ctx := context.WithValue(context.Background(), formatter.ExecutionContextKey, formatter.SystemSource) //nolint:staticcheck
+	ctx := context.WithValue(context.Background(), hook.ExecutionContextKey, hook.SystemSource) //nolint:staticcheck
 
 	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
 	require.NoError(t, err)
 
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	settingsMockManager := settings.NewMockManager(ctrl)
+	settingsMockManager.
+		EXPECT().
+		GetSettings(gomock.Any(), gomock.Any(), gomock.Any()).
+		AnyTimes().
+		Return(&types.Settings{}, nil)
+
 	accountManager, err := BuildManager(ctx, store, peersUpdateManager, nil, "", "netbird.selfhosted",
-		eventStore, nil, false, MocIntegratedValidator{}, metrics)
+		eventStore, nil, false, MocIntegratedValidator{}, metrics, port_forwarding.NewControllerMock(), settingsMockManager)
 
 	if err != nil {
 		cleanup()
 		return nil, nil, "", cleanup, err
 	}
 
-	secretsManager := NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay)
+	secretsManager := NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay, settingsMockManager)
 
 	ephemeralMgr := NewEphemeralManager(store, accountManager)
-	mgmtServer, err := NewServer(context.Background(), config, accountManager, settings.NewManager(store), peersUpdateManager, secretsManager, nil, ephemeralMgr)
+	mgmtServer, err := NewServer(context.Background(), config, accountManager, settingsMockManager, peersUpdateManager, secretsManager, nil, ephemeralMgr, nil)
 	if err != nil {
 		return nil, nil, "", cleanup, err
 	}
@@ -498,7 +509,7 @@ func testSyncStatusRace(t *testing.T) {
 	mgmtServer, am, mgmtAddr, cleanup, err := startManagementForTest(t, "testdata/store_with_expired_peers.sql", &Config{
 		Stuns: []*Host{{
 			Proto: "udp",
-			URI:   "stun:stun.wiretrustee.com:3468",
+			URI:   "stun:stun.netbird.io:3468",
 		}},
 		TURNConfig: &TURNConfig{
 			TimeBasedCredentials: false,
@@ -506,12 +517,12 @@ func testSyncStatusRace(t *testing.T) {
 			Secret:               "whatever",
 			Turns: []*Host{{
 				Proto: "udp",
-				URI:   "turn:stun.wiretrustee.com:3468",
+				URI:   "turn:stun.netbird.io:3468",
 			}},
 		},
 		Signal: &Host{
 			Proto: "http",
-			URI:   "signal.wiretrustee.com:10000",
+			URI:   "signal.netbird.io:10000",
 		},
 		Datadir:    dir,
 		HttpConfig: nil,
@@ -670,7 +681,7 @@ func Test_LoginPerformance(t *testing.T) {
 			mgmtServer, am, _, cleanup, err := startManagementForTest(t, "testdata/store_with_expired_peers.sql", &Config{
 				Stuns: []*Host{{
 					Proto: "udp",
-					URI:   "stun:stun.wiretrustee.com:3468",
+					URI:   "stun:stun.netbird.io:3468",
 				}},
 				TURNConfig: &TURNConfig{
 					TimeBasedCredentials: false,
@@ -678,12 +689,12 @@ func Test_LoginPerformance(t *testing.T) {
 					Secret:               "whatever",
 					Turns: []*Host{{
 						Proto: "udp",
-						URI:   "turn:stun.wiretrustee.com:3468",
+						URI:   "turn:stun.netbird.io:3468",
 					}},
 				},
 				Signal: &Host{
 					Proto: "http",
-					URI:   "signal.wiretrustee.com:10000",
+					URI:   "signal.netbird.io:10000",
 				},
 				Datadir:    dir,
 				HttpConfig: nil,
@@ -714,7 +725,7 @@ func Test_LoginPerformance(t *testing.T) {
 						return
 					}
 
-					setupKey, err := am.CreateSetupKey(context.Background(), account.Id, fmt.Sprintf("key-%d", j), types.SetupKeyReusable, time.Hour, nil, 0, fmt.Sprintf("user-%d", j), false)
+					setupKey, err := am.CreateSetupKey(context.Background(), account.Id, fmt.Sprintf("key-%d", j), types.SetupKeyReusable, time.Hour, nil, 0, fmt.Sprintf("user-%d", j), false, false)
 					if err != nil {
 						t.Logf("error creating setup key: %v", err)
 						return
@@ -730,16 +741,16 @@ func Test_LoginPerformance(t *testing.T) {
 						}
 
 						meta := &mgmtProto.PeerSystemMeta{
-							Hostname:           key.PublicKey().String(),
-							GoOS:               runtime.GOOS,
-							OS:                 runtime.GOOS,
-							Core:               "core",
-							Platform:           "platform",
-							Kernel:             "kernel",
-							WiretrusteeVersion: "",
+							Hostname:       key.PublicKey().String(),
+							GoOS:           runtime.GOOS,
+							OS:             runtime.GOOS,
+							Core:           "core",
+							Platform:       "platform",
+							Kernel:         "kernel",
+							NetbirdVersion: "",
 						}
 
-						peerLogin := PeerLogin{
+						peerLogin := types.PeerLogin{
 							WireGuardPubKey: key.String(),
 							SSHKey:          "random",
 							Meta:            extractPeerMeta(context.Background(), meta),
@@ -764,7 +775,7 @@ func Test_LoginPerformance(t *testing.T) {
 						messageCalls = append(messageCalls, login)
 						mu.Unlock()
 
-						go func(peerLogin PeerLogin, counterStart *int32) {
+						go func(peerLogin types.PeerLogin, counterStart *int32) {
 							defer wgPeer.Done()
 							_, _, _, err = am.LoginPeer(context.Background(), peerLogin)
 							if err != nil {

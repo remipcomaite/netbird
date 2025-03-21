@@ -12,6 +12,7 @@ import (
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/miekg/dns"
+	"github.com/rs/xid"
 	log "github.com/sirupsen/logrus"
 
 	nbdns "github.com/netbirdio/netbird/dns"
@@ -459,8 +460,23 @@ func (a *Account) GetPeersCustomZone(ctx context.Context, dnsDomain string) nbdn
 			TTL:   defaultTTL,
 			RData: peer.IP.String(),
 		})
-
 		sb.Reset()
+
+		for _, extraLabel := range peer.ExtraDNSLabels {
+			sb.Grow(len(extraLabel) + len(domainSuffix))
+			sb.WriteString(extraLabel)
+			sb.WriteString(domainSuffix)
+
+			customZone.Records = append(customZone.Records, nbdns.SimpleRecord{
+				Name:  sb.String(),
+				Type:  int(dns.TypeA),
+				Class: nbdns.DefaultClass,
+				TTL:   defaultTTL,
+				RData: peer.IP.String(),
+			})
+			sb.Reset()
+		}
+
 	}
 
 	go func() {
@@ -996,6 +1012,7 @@ func (a *Account) connResourcesGenerator(ctx context.Context) (func(*PolicyRule,
 				}
 
 				fr := FirewallRule{
+					PolicyID:  rule.ID,
 					PeerIP:    peer.IP.String(),
 					Direction: direction,
 					Action:    string(rule.Action),
@@ -1509,4 +1526,44 @@ func getPoliciesSourcePeers(policies []*Policy, groups map[string]*Group) map[st
 	}
 
 	return sourcePeers
+}
+
+// AddAllGroup to account object if it doesn't exist
+func (a *Account) AddAllGroup() error {
+	if len(a.Groups) == 0 {
+		allGroup := &Group{
+			ID:     xid.New().String(),
+			Name:   "All",
+			Issued: GroupIssuedAPI,
+		}
+		for _, peer := range a.Peers {
+			allGroup.Peers = append(allGroup.Peers, peer.ID)
+		}
+		a.Groups = map[string]*Group{allGroup.ID: allGroup}
+
+		id := xid.New().String()
+
+		defaultPolicy := &Policy{
+			ID:          id,
+			Name:        DefaultRuleName,
+			Description: DefaultRuleDescription,
+			Enabled:     true,
+			Rules: []*PolicyRule{
+				{
+					ID:            id,
+					Name:          DefaultRuleName,
+					Description:   DefaultRuleDescription,
+					Enabled:       true,
+					Sources:       []string{allGroup.ID},
+					Destinations:  []string{allGroup.ID},
+					Bidirectional: true,
+					Protocol:      PolicyRuleProtocolALL,
+					Action:        PolicyTrafficActionAccept,
+				},
+			},
+		}
+
+		a.Policies = []*Policy{defaultPolicy}
+	}
+	return nil
 }

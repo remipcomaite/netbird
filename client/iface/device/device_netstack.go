@@ -8,15 +8,18 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/netbirdio/netbird/client/iface/bind"
 	"github.com/netbirdio/netbird/client/iface/configurer"
-	"github.com/netbirdio/netbird/client/iface/netstack"
+	nbnetstack "github.com/netbirdio/netbird/client/iface/netstack"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
+	nbnet "github.com/netbirdio/netbird/util/net"
 )
 
 type TunNetstackDevice struct {
 	name          string
-	address       WGAddress
+	address       wgaddr.Address
 	port          int
 	key           string
 	mtu           int
@@ -25,12 +28,14 @@ type TunNetstackDevice struct {
 
 	device         *device.Device
 	filteredDevice *FilteredDevice
-	nsTun          *netstack.NetStackTun
+	nsTun          *nbnetstack.NetStackTun
 	udpMux         *bind.UniversalUDPMuxDefault
 	configurer     WGConfigurer
+
+	net *netstack.Net
 }
 
-func NewNetstackDevice(name string, address WGAddress, wgPort int, key string, mtu int, iceBind *bind.ICEBind, listenAddress string) *TunNetstackDevice {
+func NewNetstackDevice(name string, address wgaddr.Address, wgPort int, key string, mtu int, iceBind *bind.ICEBind, listenAddress string) *TunNetstackDevice {
 	return &TunNetstackDevice{
 		name:          name,
 		address:       address,
@@ -43,13 +48,19 @@ func NewNetstackDevice(name string, address WGAddress, wgPort int, key string, m
 }
 
 func (t *TunNetstackDevice) Create() (WGConfigurer, error) {
-	log.Info("create netstack tun interface")
-	t.nsTun = netstack.NewNetStackTun(t.listenAddress, t.address.IP.String(), t.mtu)
-	tunIface, err := t.nsTun.Create()
+	log.Info("create nbnetstack tun interface")
+
+	// TODO: get from service listener runtime IP
+	dnsAddr := nbnet.GetLastIPFromNetwork(t.address.Network, 1)
+	log.Debugf("netstack using address: %s", t.address.IP)
+	t.nsTun = nbnetstack.NewNetStackTun(t.listenAddress, t.address.IP, dnsAddr, t.mtu)
+	log.Debugf("netstack using dns address: %s", dnsAddr)
+	tunIface, net, err := t.nsTun.Create()
 	if err != nil {
 		return nil, fmt.Errorf("error creating tun device: %s", err)
 	}
 	t.filteredDevice = newDeviceFilter(tunIface)
+	t.net = net
 
 	t.device = device.NewDevice(
 		t.filteredDevice,
@@ -87,7 +98,7 @@ func (t *TunNetstackDevice) Up() (*bind.UniversalUDPMuxDefault, error) {
 	return udpMux, nil
 }
 
-func (t *TunNetstackDevice) UpdateAddr(WGAddress) error {
+func (t *TunNetstackDevice) UpdateAddr(wgaddr.Address) error {
 	return nil
 }
 
@@ -106,7 +117,7 @@ func (t *TunNetstackDevice) Close() error {
 	return nil
 }
 
-func (t *TunNetstackDevice) WgAddress() WGAddress {
+func (t *TunNetstackDevice) WgAddress() wgaddr.Address {
 	return t.address
 }
 
@@ -116,4 +127,13 @@ func (t *TunNetstackDevice) DeviceName() string {
 
 func (t *TunNetstackDevice) FilteredDevice() *FilteredDevice {
 	return t.filteredDevice
+}
+
+// Device returns the wireguard device
+func (t *TunNetstackDevice) Device() *device.Device {
+	return t.device
+}
+
+func (t *TunNetstackDevice) GetNet() *netstack.Net {
+	return t.net
 }

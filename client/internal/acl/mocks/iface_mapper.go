@@ -8,8 +8,10 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	iface "github.com/netbirdio/netbird/client/iface"
+	wgdevice "golang.zx2c4.com/wireguard/device"
+
 	"github.com/netbirdio/netbird/client/iface/device"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
 )
 
 // MockIFaceMapper is a mock of IFaceMapper interface.
@@ -36,10 +38,10 @@ func (m *MockIFaceMapper) EXPECT() *MockIFaceMapperMockRecorder {
 }
 
 // Address mocks base method.
-func (m *MockIFaceMapper) Address() iface.WGAddress {
+func (m *MockIFaceMapper) Address() wgaddr.Address {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Address")
-	ret0, _ := ret[0].(iface.WGAddress)
+	ret0, _ := ret[0].(wgaddr.Address)
 	return ret0
 }
 
@@ -89,4 +91,32 @@ func (m *MockIFaceMapper) SetFilter(arg0 device.PacketFilter) error {
 func (mr *MockIFaceMapperMockRecorder) SetFilter(arg0 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetFilter", reflect.TypeOf((*MockIFaceMapper)(nil).SetFilter), arg0)
+}
+
+// GetDevice mocks base method.
+func (m *MockIFaceMapper) GetDevice() *device.FilteredDevice {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetDevice")
+	ret0, _ := ret[0].(*device.FilteredDevice)
+	return ret0
+}
+
+// GetDevice indicates an expected call of GetDevice.
+func (mr *MockIFaceMapperMockRecorder) GetDevice() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDevice", reflect.TypeOf((*MockIFaceMapper)(nil).GetDevice))
+}
+
+// GetWGDevice mocks base method.
+func (m *MockIFaceMapper) GetWGDevice() *wgdevice.Device {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetWGDevice")
+	ret0, _ := ret[0].(*wgdevice.Device)
+	return ret0
+}
+
+// GetWGDevice indicates an expected call of GetWGDevice.
+func (mr *MockIFaceMapperMockRecorder) GetWGDevice() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetWGDevice", reflect.TypeOf((*MockIFaceMapper)(nil).GetWGDevice))
 }

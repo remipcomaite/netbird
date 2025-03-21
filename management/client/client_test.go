@@ -8,14 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/netbirdio/netbird/client/system"
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/integrations/port_forwarding"
 	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
-
-	"github.com/netbirdio/netbird/client/system"
+	"github.com/netbirdio/netbird/management/server/types"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -72,13 +74,26 @@ func startManagement(t *testing.T) (*grpc.Server, net.Listener) {
 	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
 	require.NoError(t, err)
 
-	accountManager, err := mgmt.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, ia, metrics)
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	settingsMockManager := settings.NewMockManager(ctrl)
+	settingsMockManager.
+		EXPECT().
+		GetSettings(
+			gomock.Any(),
+			gomock.Any(),
+			gomock.Any(),
+		).
+		Return(&types.Settings{}, nil).
+		AnyTimes()
+
+	accountManager, err := mgmt.BuildManager(context.Background(), store, peersUpdateManager, nil, "", "netbird.selfhosted", eventStore, nil, false, ia, metrics, port_forwarding.NewControllerMock(), settingsMockManager)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secretsManager := mgmt.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay)
-	mgmtServer, err := mgmt.NewServer(context.Background(), config, accountManager, settings.NewManager(store), peersUpdateManager, secretsManager, nil, nil)
+	secretsManager := mgmt.NewTimeBasedAuthSecretsManager(peersUpdateManager, config.TURNConfig, config.Relay, settingsMockManager)
+	mgmtServer, err := mgmt.NewServer(context.Background(), config, accountManager, settingsMockManager, peersUpdateManager, secretsManager, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +192,7 @@ func TestClient_LoginUnregistered_ShouldThrow_401(t *testing.T) {
 		t.Fatal(err)
 	}
 	sysInfo := system.GetInfo(context.TODO())
-	_, err = client.Login(*key, sysInfo, nil)
+	_, err = client.Login(*key, sysInfo, nil, nil)
 	if err == nil {
 		t.Error("expecting err on unregistered login, got nil")
 	}
@@ -205,7 +220,7 @@ func TestClient_LoginRegistered(t *testing.T) {
 		t.Error(err)
 	}
 	info := system.GetInfo(context.TODO())
-	resp, err := client.Register(*key, ValidKey, "", info, nil)
+	resp, err := client.Register(*key, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -235,7 +250,7 @@ func TestClient_Sync(t *testing.T) {
 	}
 
 	info := system.GetInfo(context.TODO())
-	_, err = client.Register(*serverKey, ValidKey, "", info, nil)
+	_, err = client.Register(*serverKey, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -251,15 +266,18 @@ func TestClient_Sync(t *testing.T) {
 	}
 
 	info = system.GetInfo(context.TODO())
-	_, err = remoteClient.Register(*serverKey, ValidKey, "", info, nil)
+	_, err = remoteClient.Register(*serverKey, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ch := make(chan *mgmtProto.SyncResponse, 1)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
-		err = client.Sync(context.Background(), info, func(msg *mgmtProto.SyncResponse) error {
+		err = client.Sync(ctx, info, func(msg *mgmtProto.SyncResponse) error {
 			ch <- msg
 			return nil
 		})
@@ -273,8 +291,8 @@ func TestClient_Sync(t *testing.T) {
 		if resp.GetPeerConfig() == nil {
 			t.Error("expecting non nil PeerConfig got nil")
 		}
-		if resp.GetWiretrusteeConfig() == nil {
-			t.Error("expecting non nil WiretrusteeConfig got nil")
+		if resp.GetNetbirdConfig() == nil {
+			t.Error("expecting non nil NetbirdConfig got nil")
 		}
 		if len(resp.GetRemotePeers()) != 1 {
 			t.Errorf("expecting RemotePeers size %d got %d", 1, len(resp.GetRemotePeers()))
@@ -349,7 +367,7 @@ func Test_SystemMetaDataFromClient(t *testing.T) {
 	}
 
 	info := system.GetInfo(context.TODO())
-	_, err = testClient.Register(*key, ValidKey, "", info, nil)
+	_, err = testClient.Register(*key, ValidKey, "", info, nil, nil)
 	if err != nil {
 		t.Errorf("error while trying to register client: %v", err)
 	}
@@ -366,15 +384,15 @@ func Test_SystemMetaDataFromClient(t *testing.T) {
 	}
 
 	expectedMeta := &mgmtProto.PeerSystemMeta{
-		Hostname:           info.Hostname,
-		GoOS:               info.GoOS,
-		Kernel:             info.Kernel,
-		Platform:           info.Platform,
-		OS:                 info.OS,
-		Core:               info.OSVersion,
-		OSVersion:          info.OSVersion,
-		WiretrusteeVersion: info.WiretrusteeVersion,
-		KernelVersion:      info.KernelVersion,
+		Hostname:       info.Hostname,
+		GoOS:           info.GoOS,
+		Kernel:         info.Kernel,
+		Platform:       info.Platform,
+		OS:             info.OS,
+		Core:           info.OSVersion,
+		OSVersion:      info.OSVersion,
+		NetbirdVersion: info.NetbirdVersion,
+		KernelVersion:  info.KernelVersion,
 
 		NetworkAddresses: protoNetAddr,
 		SysSerialNumber:  info.SystemSerialNumber,
@@ -417,7 +435,7 @@ func isEqual(a, b *mgmtProto.PeerSystemMeta) bool {
 		a.GetPlatform() == b.GetPlatform() &&
 		a.GetOS() == b.GetOS() &&
 		a.GetOSVersion() == b.GetOSVersion() &&
-		a.GetWiretrusteeVersion() == b.GetWiretrusteeVersion() &&
+		a.GetNetbirdVersion() == b.GetNetbirdVersion() &&
 		a.GetUiVersion() == b.GetUiVersion() &&
 		a.GetSysSerialNumber() == b.GetSysSerialNumber() &&
 		a.GetSysProductName() == b.GetSysProductName() &&

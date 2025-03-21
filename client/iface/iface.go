@@ -3,18 +3,23 @@ package iface
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/go-multierror"
 	"github.com/pion/transport/v3"
 	log "github.com/sirupsen/logrus"
+	"golang.zx2c4.com/wireguard/tun/netstack"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
+
+	wgdevice "golang.zx2c4.com/wireguard/device"
 
 	"github.com/netbirdio/netbird/client/errors"
 	"github.com/netbirdio/netbird/client/iface/bind"
 	"github.com/netbirdio/netbird/client/iface/configurer"
 	"github.com/netbirdio/netbird/client/iface/device"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
 	"github.com/netbirdio/netbird/client/iface/wgproxy"
 )
 
@@ -23,8 +28,6 @@ const (
 	DefaultWgPort      = 51820
 	WgInterfaceDefault = configurer.WgInterfaceDefault
 )
-
-type WGAddress = device.WGAddress
 
 type wgProxyFactory interface {
 	GetProxy() wgproxy.Proxy
@@ -68,7 +71,7 @@ func (w *WGIface) Name() string {
 }
 
 // Address returns the interface address
-func (w *WGIface) Address() device.WGAddress {
+func (w *WGIface) Address() wgaddr.Address {
 	return w.tun.WgAddress()
 }
 
@@ -99,7 +102,7 @@ func (w *WGIface) UpdateAddr(newAddr string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	addr, err := device.ParseWGAddress(newAddr)
+	addr, err := wgaddr.ParseWGAddress(newAddr)
 	if err != nil {
 		return err
 	}
@@ -109,12 +112,13 @@ func (w *WGIface) UpdateAddr(newAddr string) error {
 
 // UpdatePeer updates existing Wireguard Peer or creates a new one if doesn't exist
 // Endpoint is optional
-func (w *WGIface) UpdatePeer(peerKey string, allowedIps string, keepAlive time.Duration, endpoint *net.UDPAddr, preSharedKey *wgtypes.Key) error {
+func (w *WGIface) UpdatePeer(peerKey string, allowedIps []netip.Prefix, keepAlive time.Duration, endpoint *net.UDPAddr, preSharedKey *wgtypes.Key) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	netIPNets := prefixesToIPNets(allowedIps)
 	log.Debugf("updating interface %s peer %s, endpoint %s", w.tun.DeviceName(), peerKey, endpoint)
-	return w.configurer.UpdatePeer(peerKey, allowedIps, keepAlive, endpoint, preSharedKey)
+	return w.configurer.UpdatePeer(peerKey, netIPNets, keepAlive, endpoint, preSharedKey)
 }
 
 // RemovePeer removes a Wireguard Peer from the interface iface
@@ -203,6 +207,11 @@ func (w *WGIface) GetDevice() *device.FilteredDevice {
 	return w.tun.FilteredDevice()
 }
 
+// GetWGDevice returns the WireGuard device
+func (w *WGIface) GetWGDevice() *wgdevice.Device {
+	return w.tun.Device()
+}
+
 // GetStats returns the last handshake time, rx and tx bytes for the given peer
 func (w *WGIface) GetStats(peerKey string) (configurer.WGStats, error) {
 	return w.configurer.GetStats(peerKey)
@@ -233,4 +242,23 @@ func (w *WGIface) waitUntilRemoved() error {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+}
+
+// GetNet returns the netstack.Net for the netstack device
+func (w *WGIface) GetNet() *netstack.Net {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.tun.GetNet()
+}
+
+func prefixesToIPNets(prefixes []netip.Prefix) []net.IPNet {
+	ipNets := make([]net.IPNet, len(prefixes))
+	for i, prefix := range prefixes {
+		ipNets[i] = net.IPNet{
+			IP:   net.IP(prefix.Addr().AsSlice()),                     // Convert netip.Addr to net.IP
+			Mask: net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()), // Create subnet mask
+		}
+	}
+	return ipNets
 }

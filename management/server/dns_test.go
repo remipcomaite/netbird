@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
 	nbdns "github.com/netbirdio/netbird/dns"
+	"github.com/netbirdio/netbird/management/server/integrations/port_forwarding"
+	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
 	"github.com/netbirdio/netbird/management/server/types"
@@ -42,7 +45,7 @@ func TestGetDNSSettings(t *testing.T) {
 
 	account, err := initTestDNSAccount(t, am)
 	if err != nil {
-		t.Fatal("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	dnsSettings, err := am.GetDNSSettings(context.Background(), account.Id, dnsAdminUserID)
@@ -124,12 +127,12 @@ func TestSaveDNSSettings(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			am, err := createDNSManager(t)
 			if err != nil {
-				t.Error("failed to create account manager")
+				t.Fatalf("failed to create account manager")
 			}
 
 			account, err := initTestDNSAccount(t, am)
 			if err != nil {
-				t.Error("failed to init testing account")
+				t.Fatalf("failed to init testing account: %v", err)
 			}
 
 			err = am.SaveDNSSettings(context.Background(), account.Id, testCase.userID, testCase.inputSettings)
@@ -156,22 +159,22 @@ func TestGetNetworkMap_DNSConfigSync(t *testing.T) {
 
 	am, err := createDNSManager(t)
 	if err != nil {
-		t.Error("failed to create account manager")
+		t.Fatalf("failed to create account manager: %s", err)
 	}
 
 	account, err := initTestDNSAccount(t, am)
 	if err != nil {
-		t.Error("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	peer1, err := account.FindPeerByPubKey(dnsPeer1Key)
 	if err != nil {
-		t.Error("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	peer2, err := account.FindPeerByPubKey(dnsPeer2Key)
 	if err != nil {
-		t.Error("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	newAccountDNSConfig, err := am.GetNetworkMap(context.Background(), peer1.ID)
@@ -208,7 +211,12 @@ func createDNSManager(t *testing.T) (*DefaultAccountManager, error) {
 	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
 	require.NoError(t, err)
 
-	return BuildManager(context.Background(), store, NewPeersUpdateManager(nil), nil, "", "netbird.test", eventStore, nil, false, MocIntegratedValidator{}, metrics)
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	settingsMockManager := settings.NewMockManager(ctrl)
+
+	return BuildManager(context.Background(), store, NewPeersUpdateManager(nil), nil, "", "netbird.test", eventStore, nil, false, MocIntegratedValidator{}, metrics, port_forwarding.NewControllerMock(), settingsMockManager)
 }
 
 func createDNSStore(t *testing.T) (store.Store, error) {

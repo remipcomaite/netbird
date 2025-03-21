@@ -9,14 +9,16 @@ import (
 	log "github.com/sirupsen/logrus"
 	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
+	"golang.zx2c4.com/wireguard/tun/netstack"
 
 	"github.com/netbirdio/netbird/client/iface/bind"
 	"github.com/netbirdio/netbird/client/iface/configurer"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
 )
 
 type TunDevice struct {
 	name    string
-	address WGAddress
+	address wgaddr.Address
 	port    int
 	key     string
 	mtu     int
@@ -28,7 +30,7 @@ type TunDevice struct {
 	configurer     WGConfigurer
 }
 
-func NewTunDevice(name string, address WGAddress, port int, key string, mtu int, iceBind *bind.ICEBind) *TunDevice {
+func NewTunDevice(name string, address wgaddr.Address, port int, key string, mtu int, iceBind *bind.ICEBind) *TunDevice {
 	return &TunDevice{
 		name:    name,
 		address: address,
@@ -84,7 +86,7 @@ func (t *TunDevice) Up() (*bind.UniversalUDPMuxDefault, error) {
 	return udpMux, nil
 }
 
-func (t *TunDevice) UpdateAddr(address WGAddress) error {
+func (t *TunDevice) UpdateAddr(address wgaddr.Address) error {
 	t.address = address
 	return t.assignAddr()
 }
@@ -105,7 +107,7 @@ func (t *TunDevice) Close() error {
 	return nil
 }
 
-func (t *TunDevice) WgAddress() WGAddress {
+func (t *TunDevice) WgAddress() wgaddr.Address {
 	return t.address
 }
 
@@ -115,6 +117,11 @@ func (t *TunDevice) DeviceName() string {
 
 func (t *TunDevice) FilteredDevice() *FilteredDevice {
 	return t.filteredDevice
+}
+
+// Device returns the wireguard device
+func (t *TunDevice) Device() *device.Device {
+	return t.device
 }
 
 // assignAddr Adds IP address to the tunnel interface and network route based on the range provided
@@ -136,5 +143,9 @@ func (t *TunDevice) assignAddr() error {
 		log.Errorf("adding route command '%v' failed with output: %s", routeCmd.String(), out)
 		return err
 	}
+	return nil
+}
+
+func (t *TunDevice) GetNet() *netstack.Net {
 	return nil
 }

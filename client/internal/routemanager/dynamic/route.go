@@ -13,8 +13,8 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	nberrors "github.com/netbirdio/netbird/client/errors"
-	"github.com/netbirdio/netbird/client/iface"
 	"github.com/netbirdio/netbird/client/internal/peer"
+	"github.com/netbirdio/netbird/client/internal/routemanager/iface"
 	"github.com/netbirdio/netbird/client/internal/routemanager/refcounter"
 	"github.com/netbirdio/netbird/client/internal/routemanager/util"
 	"github.com/netbirdio/netbird/management/domain"
@@ -48,7 +48,7 @@ type Route struct {
 	currentPeerKey       string
 	cancel               context.CancelFunc
 	statusRecorder       *peer.Status
-	wgInterface          iface.IWGIface
+	wgInterface          iface.WGIface
 	resolverAddr         string
 }
 
@@ -58,7 +58,7 @@ func NewRoute(
 	allowedIPsRefCounter *refcounter.AllowedIPsRefCounter,
 	interval time.Duration,
 	statusRecorder *peer.Status,
-	wgInterface iface.IWGIface,
+	wgInterface iface.WGIface,
 	resolverAddr string,
 ) *Route {
 	return &Route{
@@ -288,7 +288,7 @@ func (r *Route) updateDynamicRoutes(ctx context.Context, newDomains domainMap) e
 		updatedPrefixes := combinePrefixes(oldPrefixes, removedPrefixes, addedPrefixes)
 		r.dynamicDomains[domain] = updatedPrefixes
 
-		r.statusRecorder.UpdateResolvedDomainsStates(domain, domain, updatedPrefixes)
+		r.statusRecorder.UpdateResolvedDomainsStates(domain, domain, updatedPrefixes, r.route.GetResourceID())
 	}
 
 	return nberrors.FormatErrorOrNil(merr)

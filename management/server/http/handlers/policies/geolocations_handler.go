@@ -6,12 +6,11 @@ import (
 
 	"github.com/gorilla/mux"
 
-	"github.com/netbirdio/netbird/management/server"
+	"github.com/netbirdio/netbird/management/server/account"
+	nbcontext "github.com/netbirdio/netbird/management/server/context"
 	"github.com/netbirdio/netbird/management/server/geolocation"
 	"github.com/netbirdio/netbird/management/server/http/api"
-	"github.com/netbirdio/netbird/management/server/http/configs"
 	"github.com/netbirdio/netbird/management/server/http/util"
-	"github.com/netbirdio/netbird/management/server/jwtclaims"
 	"github.com/netbirdio/netbird/management/server/status"
 )
 
@@ -21,26 +20,21 @@ var (
 
 // geolocationsHandler is a handler that returns locations.
 type geolocationsHandler struct {
-	accountManager     server.AccountManager
+	accountManager     account.Manager
 	geolocationManager geolocation.Geolocation
-	claimsExtractor    *jwtclaims.ClaimsExtractor
 }
 
-func addLocationsEndpoint(accountManager server.AccountManager, locationManager geolocation.Geolocation, authCfg configs.AuthCfg, router *mux.Router) {
-	locationHandler := newGeolocationsHandlerHandler(accountManager, locationManager, authCfg)
+func addLocationsEndpoint(accountManager account.Manager, locationManager geolocation.Geolocation, router *mux.Router) {
+	locationHandler := newGeolocationsHandlerHandler(accountManager, locationManager)
 	router.HandleFunc("/locations/countries", locationHandler.getAllCountries).Methods("GET", "OPTIONS")
 	router.HandleFunc("/locations/countries/{country}/cities", locationHandler.getCitiesByCountry).Methods("GET", "OPTIONS")
 }
 
 // newGeolocationsHandlerHandler creates a new Geolocations handler
-func newGeolocationsHandlerHandler(accountManager server.AccountManager, geolocationManager geolocation.Geolocation, authCfg configs.AuthCfg) *geolocationsHandler {
+func newGeolocationsHandlerHandler(accountManager account.Manager, geolocationManager geolocation.Geolocation) *geolocationsHandler {
 	return &geolocationsHandler{
 		accountManager:     accountManager,
 		geolocationManager: geolocationManager,
-		claimsExtractor: jwtclaims.NewClaimsExtractor(
-			jwtclaims.WithAudience(authCfg.Audience),
-			jwtclaims.WithUserIDClaim(authCfg.UserIDClaim),
-		),
 	}
 }
 
@@ -104,11 +98,12 @@ func (l *geolocationsHandler) getCitiesByCountry(w http.ResponseWriter, r *http.
 }
 
 func (l *geolocationsHandler) authenticateUser(r *http.Request) error {
-	claims := l.claimsExtractor.FromRequestContext(r)
-	_, userID, err := l.accountManager.GetAccountIDFromToken(r.Context(), claims)
+	userAuth, err := nbcontext.GetUserAuthFromContext(r.Context())
 	if err != nil {
 		return err
 	}
+
+	_, userID := userAuth.AccountId, userAuth.UserId
 
 	user, err := l.accountManager.GetUserByID(r.Context(), userID)
 	if err != nil {

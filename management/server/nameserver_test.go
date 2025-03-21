@@ -6,12 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	nbdns "github.com/netbirdio/netbird/dns"
 	"github.com/netbirdio/netbird/management/server/activity"
+	"github.com/netbirdio/netbird/management/server/integrations/port_forwarding"
 	nbpeer "github.com/netbirdio/netbird/management/server/peer"
+	"github.com/netbirdio/netbird/management/server/settings"
 	"github.com/netbirdio/netbird/management/server/store"
 	"github.com/netbirdio/netbird/management/server/telemetry"
 	"github.com/netbirdio/netbird/management/server/types"
@@ -379,12 +382,12 @@ func TestCreateNameServerGroup(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			am, err := createNSManager(t)
 			if err != nil {
-				t.Error("failed to create account manager")
+				t.Fatalf("failed to create account manager: %s", err)
 			}
 
 			account, err := initTestNSAccount(t, am)
 			if err != nil {
-				t.Error("failed to init testing account")
+				t.Fatalf("failed to init testing account: %s", err)
 			}
 
 			outNSGroup, err := am.CreateNameServerGroup(
@@ -607,12 +610,12 @@ func TestSaveNameServerGroup(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			am, err := createNSManager(t)
 			if err != nil {
-				t.Error("failed to create account manager")
+				t.Fatalf("failed to create account manager: %s", err)
 			}
 
 			account, err := initTestNSAccount(t, am)
 			if err != nil {
-				t.Error("failed to init testing account")
+				t.Fatalf("failed to init testing account: %s", err)
 			}
 
 			account.NameServerGroups[testCase.existingNSGroup.ID] = testCase.existingNSGroup
@@ -706,7 +709,7 @@ func TestDeleteNameServerGroup(t *testing.T) {
 
 	account, err := initTestNSAccount(t, am)
 	if err != nil {
-		t.Error("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	account.NameServerGroups[testingNSGroup.ID] = testingNSGroup
@@ -741,7 +744,7 @@ func TestGetNameServerGroup(t *testing.T) {
 
 	account, err := initTestNSAccount(t, am)
 	if err != nil {
-		t.Error("failed to init testing account")
+		t.Fatalf("failed to init testing account: %s", err)
 	}
 
 	foundGroup, err := am.GetNameServerGroup(context.Background(), account.Id, testUserID, existingNSGroupID)
@@ -761,6 +764,7 @@ func TestGetNameServerGroup(t *testing.T) {
 
 func createNSManager(t *testing.T) (*DefaultAccountManager, error) {
 	t.Helper()
+
 	store, err := createNSStore(t)
 	if err != nil {
 		return nil, err
@@ -770,7 +774,11 @@ func createNSManager(t *testing.T) (*DefaultAccountManager, error) {
 	metrics, err := telemetry.NewDefaultAppMetrics(context.Background())
 	require.NoError(t, err)
 
-	return BuildManager(context.Background(), store, NewPeersUpdateManager(nil), nil, "", "netbird.selfhosted", eventStore, nil, false, MocIntegratedValidator{}, metrics)
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	settingsMockManager := settings.NewMockManager(ctrl)
+
+	return BuildManager(context.Background(), store, NewPeersUpdateManager(nil), nil, "", "netbird.selfhosted", eventStore, nil, false, MocIntegratedValidator{}, metrics, port_forwarding.NewControllerMock(), settingsMockManager)
 }
 
 func createNSStore(t *testing.T) (store.Store, error) {

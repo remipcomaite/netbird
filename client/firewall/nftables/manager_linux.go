@@ -14,7 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	firewall "github.com/netbirdio/netbird/client/firewall/manager"
-	"github.com/netbirdio/netbird/client/iface"
+	"github.com/netbirdio/netbird/client/iface/wgaddr"
 	"github.com/netbirdio/netbird/client/internal/statemanager"
 )
 
@@ -29,7 +29,7 @@ const (
 // iFaceMapper defines subset methods of interface required for manager
 type iFaceMapper interface {
 	Name() string
-	Address() iface.WGAddress
+	Address() wgaddr.Address
 	IsUserspaceBind() bool
 }
 
@@ -87,7 +87,7 @@ func (m *Manager) Init(stateManager *statemanager.Manager) error {
 	// We only need to record minimal interface state for potential recreation.
 	// Unlike iptables, which requires tracking individual rules, nftables maintains
 	// a known state (our netbird table plus a few static rules). This allows for easy
-	// cleanup using Reset() without needing to store specific rules.
+	// cleanup using Close() without needing to store specific rules.
 	if err := stateManager.UpdateState(&ShutdownState{
 		InterfaceState: &InterfaceState{
 			NameStr:       m.wgIface.Name(),
@@ -113,13 +113,13 @@ func (m *Manager) Init(stateManager *statemanager.Manager) error {
 // If comment argument is empty firewall manager should set
 // rule ID as comment for the rule
 func (m *Manager) AddPeerFiltering(
+	id []byte,
 	ip net.IP,
 	proto firewall.Protocol,
 	sPort *firewall.Port,
 	dPort *firewall.Port,
 	action firewall.Action,
 	ipsetName string,
-	comment string,
 ) ([]firewall.Rule, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -129,10 +129,11 @@ func (m *Manager) AddPeerFiltering(
 		return nil, fmt.Errorf("unsupported IP version: %s", ip.String())
 	}
 
-	return m.aclManager.AddPeerFiltering(ip, proto, sPort, dPort, action, ipsetName, comment)
+	return m.aclManager.AddPeerFiltering(id, ip, proto, sPort, dPort, action, ipsetName)
 }
 
 func (m *Manager) AddRouteFiltering(
+	id []byte,
 	sources []netip.Prefix,
 	destination netip.Prefix,
 	proto firewall.Protocol,
@@ -147,7 +148,7 @@ func (m *Manager) AddRouteFiltering(
 		return nil, fmt.Errorf("unsupported IP version: %s", destination.Addr().String())
 	}
 
-	return m.router.AddRouteFiltering(sources, destination, proto, sPort, dPort, action)
+	return m.router.AddRouteFiltering(id, sources, destination, proto, sPort, dPort, action)
 }
 
 // DeletePeerRule from the firewall by rule definition
@@ -242,7 +243,7 @@ func (m *Manager) SetLegacyManagement(isLegacy bool) error {
 }
 
 // Reset firewall to the default state
-func (m *Manager) Reset(stateManager *statemanager.Manager) error {
+func (m *Manager) Close(stateManager *statemanager.Manager) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -318,6 +319,19 @@ func (m *Manager) cleanupNetbirdTables() error {
 	return nil
 }
 
+// SetLogLevel sets the log level for the firewall manager
+func (m *Manager) SetLogLevel(log.Level) {
+	// not supported
+}
+
+func (m *Manager) EnableRouting() error {
+	return nil
+}
+
+func (m *Manager) DisableRouting() error {
+	return nil
+}
+
 // Flush rule/chain/set operations from the buffer
 //
 // Method also get all rules after flush and refreshes handle values in the rulesets
@@ -327,6 +341,22 @@ func (m *Manager) Flush() error {
 	defer m.mutex.Unlock()
 
 	return m.aclManager.Flush()
+}
+
+// AddDNATRule adds a DNAT rule
+func (m *Manager) AddDNATRule(rule firewall.ForwardRule) (firewall.Rule, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return m.router.AddDNATRule(rule)
+}
+
+// DeleteDNATRule deletes a DNAT rule
+func (m *Manager) DeleteDNATRule(rule firewall.Rule) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	return m.router.DeleteDNATRule(rule)
 }
 
 func (m *Manager) createWorkTable() (*nftables.Table, error) {
