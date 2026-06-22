@@ -53,7 +53,6 @@ import (
 	"github.com/netbirdio/netbird/client/internal/relay"
 	"github.com/netbirdio/netbird/client/internal/rosenpass"
 	"github.com/netbirdio/netbird/client/internal/routemanager"
-	"github.com/netbirdio/netbird/client/internal/routemanager/systemops"
 	"github.com/netbirdio/netbird/client/internal/statemanager"
 	"github.com/netbirdio/netbird/client/internal/syncstore"
 	"github.com/netbirdio/netbird/client/internal/updater"
@@ -240,7 +239,7 @@ type Engine struct {
 	syncStore    syncstore.Store
 	syncStoreDir string
 
-	flowManager         nftypes.FlowManager
+	flowManager nftypes.FlowManager
 
 	// auto-update
 	updateManager *updater.Manager
@@ -529,6 +528,10 @@ func (e *Engine) Start(netbirdConfig *mgmProto.NetbirdConfig, mgmtURL *url.URL) 
 		log.Errorf("failed creating tunnel interface %s: [%s]", e.config.WgIfaceName, err.Error())
 		e.close()
 		return fmt.Errorf("create wg interface: %w", err)
+	}
+
+	if filteredDevice := e.wgInterface.GetDevice(); filteredDevice != nil {
+		filteredDevice.SetPanicHandler(e.triggerClientRestart)
 	}
 
 	if err := e.createFirewall(); err != nil {
@@ -1711,6 +1714,13 @@ func (e *Engine) receiveSignalEvents() {
 				return e.ctx.Err()
 			}
 
+			// Self-addressed heartbeat: the signal client's receive watchdog
+			// round-trips this through the server to confirm the receive stream
+			// is delivering. Liveness is already recorded before this handler.
+			if msg.GetBody().GetType() == sProto.Body_HEARTBEAT {
+				return nil
+			}
+
 			conn, ok := e.peerStore.PeerConn(msg.Key)
 			if !ok {
 				return fmt.Errorf("wrongly addressed message %s", msg.Key)
@@ -1909,7 +1919,6 @@ func (e *Engine) newWgIface() (*iface.WGIface, error) {
 		WGPrivKey:    e.config.WgPrivateKey.String(),
 		MTU:          e.config.MTU,
 		TransportNet: transportNet,
-		FilterFn:     e.addrViaRoutes,
 		DisableDNS:   e.config.DisableDNS,
 	}
 
@@ -2155,21 +2164,6 @@ func (e *Engine) startNetworkMonitor() {
 		log.Infof("Network monitor: detected network change, triggering client restart")
 		e.triggerClientRestart()
 	}()
-}
-
-func (e *Engine) addrViaRoutes(addr netip.Addr) (bool, netip.Prefix, error) {
-	var vpnRoutes []netip.Prefix
-	for _, routes := range e.routeManager.GetClientRoutes() {
-		if len(routes) > 0 && routes[0] != nil {
-			vpnRoutes = append(vpnRoutes, routes[0].Network)
-		}
-	}
-
-	if isVpn, prefix := systemops.IsAddrRouted(addr, vpnRoutes); isVpn {
-		return true, prefix, nil
-	}
-
-	return false, netip.Prefix{}, nil
 }
 
 func (e *Engine) stopDNSServer() {
