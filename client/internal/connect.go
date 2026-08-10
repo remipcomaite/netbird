@@ -257,7 +257,10 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 		log.Errorf("failed to clean up temporary installer file: %v", err)
 	}
 
-	defer c.statusRecorder.ClientStop()
+	defer func() {
+		c.statusRecorder.SetSessionExpiresAt(time.Time{})
+		c.statusRecorder.ClientStop()
+	}()
 	operation := func() error {
 		// if context cancelled we not start new backoff cycle
 		if c.ctx.Err() != nil {
@@ -277,6 +280,15 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 		log.Debugf("connecting to the Management service %s", c.config.ManagementURL.Host)
 		mgmClient, err := mgm.NewClient(engineCtx, c.config.ManagementURL.Host, myPrivateKey, mgmTlsEnabled)
 		if err != nil {
+			// On daemon shutdown / Down() the parent context is cancelled
+			// and the dial fails with "context canceled". Wrapping that
+			// into state would leave the snapshot stuck at Connecting+err
+			// until the backoff loop wakes up — instead let the operation
+			// return cleanly so the deferred state.Set(StatusIdle) takes
+			// effect on the next iteration.
+			if c.ctx.Err() != nil {
+				return nil
+			}
 			return wrapErr(gstatus.Errorf(codes.FailedPrecondition, "failed connecting to Management Service : %s", err))
 		}
 		mgmNotifier := statusRecorderToMgmConnStateNotifier(c.statusRecorder)
@@ -415,6 +427,10 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 			return wrapErr(err)
 		}
 
+		// Seed the session-expiry deadline from the LoginResponse. Subsequent
+		// changes flow in through SyncResponse and are applied in handleSync.
+		engine.ApplySessionDeadline(loginResp.GetSessionExpiresAt())
+
 		log.Infof("Netbird engine started, the IP is: %s", peerConfig.GetAddress())
 		state.Set(StatusConnected)
 
@@ -451,6 +467,10 @@ func (c *ConnectClient) run(mobileDependency MobileDependency, runningChan chan 
 	}
 
 	c.statusRecorder.ClientStart()
+	// Wrap the backoff with c.ctx so Down()/actCancel propagates into the
+	// inter-attempt sleep — otherwise a 15s MaxInterval can keep the retry
+	// loop alive long after the caller asked to give up, leaving the
+	// status stream stuck at Connecting.
 	err = backoff.Retry(operation, backoff.WithContext(backOff, c.ctx))
 	if err != nil {
 		log.Debugf("exiting client retry loop due to unrecoverable error: %s", err)
@@ -601,6 +621,7 @@ func createEngineConfig(key wgtypes.Key, config *profilemanager.Config, peerConf
 		BlockLANAccess:      config.BlockLANAccess,
 		BlockInbound:        config.BlockInbound,
 		DisableIPv6:         config.DisableIPv6,
+		SyncMessageVersion:  config.SyncMessageVersion,
 
 		LazyConnection: lazyconn.ParseState(config.LazyConnection),
 
@@ -676,6 +697,7 @@ func loginToManagement(ctx context.Context, client mgm.Client, pubSSHKey []byte,
 		config.BlockLANAccess,
 		config.BlockInbound,
 		config.DisableIPv6,
+		config.SyncMessageVersion,
 		config.EnableSSHRoot,
 		config.EnableSSHSFTP,
 		config.EnableSSHLocalPortForwarding,

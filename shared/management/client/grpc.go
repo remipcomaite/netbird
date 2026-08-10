@@ -24,6 +24,7 @@ import (
 	"github.com/netbirdio/netbird/client/system"
 	"github.com/netbirdio/netbird/encryption"
 	"github.com/netbirdio/netbird/shared/management/domain"
+	nbmgmtgrpc "github.com/netbirdio/netbird/shared/management/grpc"
 	"github.com/netbirdio/netbird/shared/management/proto"
 	"github.com/netbirdio/netbird/util/wsproxy"
 )
@@ -654,26 +655,14 @@ func (c *GrpcClient) ExtendAuthSession(sysInfo *system.Info, jwtToken string) (*
 		return nil, err
 	}
 
-	var resp *proto.EncryptedMessage
-	operation := func() error {
-		mgmCtx, cancel := context.WithTimeout(context.Background(), ConnectTimeout)
-		defer cancel()
+	mgmCtx, cancel := context.WithTimeout(c.ctx, ConnectTimeout)
+	defer cancel()
 
-		var err error
-		resp, err = c.realClient.ExtendAuthSession(mgmCtx, &proto.EncryptedMessage{
-			WgPubKey: c.key.PublicKey().String(),
-			Body:     reqBody,
-		})
-		if err != nil {
-			if s, ok := gstatus.FromError(err); ok && s.Code() == codes.Canceled {
-				return err
-			}
-			return backoff.Permanent(err)
-		}
-		return nil
-	}
-
-	if err := backoff.Retry(operation, nbgrpc.Backoff(c.ctx)); err != nil {
+	resp, err := c.realClient.ExtendAuthSession(mgmCtx, &proto.EncryptedMessage{
+		WgPubKey: c.key.PublicKey().String(),
+		Body:     reqBody,
+	})
+	if err != nil {
 		log.Errorf("failed to extend auth session on Management Service: %v", err)
 		return nil, err
 	}
@@ -1038,6 +1027,8 @@ func infoToMetaData(info *system.Info) *proto.PeerSystemMeta {
 		},
 
 		Capabilities: peerCapabilities(*info),
+
+		SyncMessageVersion: syncMessageVersion(*info),
 	}
 }
 
@@ -1050,4 +1041,11 @@ func peerCapabilities(info system.Info) []proto.PeerCapability {
 		caps = append(caps, proto.PeerCapability_PeerCapabilityIPv6Overlay)
 	}
 	return caps
+}
+
+func syncMessageVersion(info system.Info) int32 {
+	if info.SyncMessageVersion != nil {
+		return int32(*info.SyncMessageVersion)
+	}
+	return int32(nbmgmtgrpc.HighestSyncMessageVersion)
 }

@@ -1612,6 +1612,12 @@ type Account struct {
 	Settings   AccountSettings   `json:"settings"`
 }
 
+// AccountDashboardFeatures Per-account dashboard section visibility overrides. Omitted keys follow the default dashboard behavior.
+type AccountDashboardFeatures struct {
+	// AgentNetwork Controls the Agent Network menu for the account regardless of the deployment feature flag. When true the menu is shown, when false it is hidden, and when omitted the default behavior applies. Must be true when agent_network_only is enabled.
+	AgentNetwork *bool `json:"agent_network,omitempty"`
+}
+
 // AccountExtraSettings defines model for AccountExtraSettings.
 type AccountExtraSettings struct {
 	// NetworkTrafficLogsEnabled Enables or disables network traffic logging. If enabled, all network traffic events from peers will be stored.
@@ -1647,11 +1653,17 @@ type AccountRequest struct {
 
 // AccountSettings defines model for AccountSettings.
 type AccountSettings struct {
+	// AgentNetworkOnly Limits the dashboard to the Agent Network surface for this account. Set for accounts created via netbird.ai signups and can be disabled later. Enabling this requires dashboard_features.agent_network to be true in the same request.
+	AgentNetworkOnly *bool `json:"agent_network_only,omitempty"`
+
 	// AutoUpdateAlways When true, updates are installed automatically in the background. When false, updates require user interaction from the UI.
 	AutoUpdateAlways *bool `json:"auto_update_always,omitempty"`
 
 	// AutoUpdateVersion Set Clients auto-update version. "latest", "disabled", or a specific version (e.g "0.50.1")
 	AutoUpdateVersion *string `json:"auto_update_version,omitempty"`
+
+	// DashboardFeatures Per-account dashboard section visibility overrides. Omitted keys follow the default dashboard behavior.
+	DashboardFeatures *AccountDashboardFeatures `json:"dashboard_features,omitempty"`
 
 	// DnsDomain Allows to define a custom dns domain for the account
 	DnsDomain *string `json:"dns_domain,omitempty"`
@@ -2215,6 +2227,9 @@ type AgentNetworkProvider struct {
 	// IdentityHeaderUserId Wire header name the proxy stamps with the caller's display identity (user email or peer name) when the catalog entry's HeaderPair is `customizable`. Empty disables stamping for this dimension. Ignored when the catalog entry has a fixed HeaderPair (e.g. LiteLLM, Portkey). Used today by Bifrost: typical values are `x-bf-lh-netbird_user_id` (always-on log metadata) or `x-bf-dim-netbird_user_id` (Prometheus / OTEL — requires the label to be pre-declared in the gateway's `client.prometheus_labels` config).
 	IdentityHeaderUserId *string `json:"identity_header_user_id,omitempty"`
 
+	// MetadataDisabled Whether identity metadata injection is disabled for this provider. When enabled (the default), the proxy stamps the caller's user and authorizing group onto upstream requests as provider-specific metadata (e.g. AWS Bedrock's X-Amzn-Bedrock-Request-Metadata header). Set true to suppress it.
+	MetadataDisabled bool `json:"metadata_disabled"`
+
 	// Models Models exposed through this endpoint, with the operator's per-1k input/output prices. Empty means all catalog models are allowed at catalog prices.
 	Models []AgentNetworkProviderModel `json:"models"`
 
@@ -2265,6 +2280,9 @@ type AgentNetworkProviderRequest struct {
 
 	// IdentityHeaderUserId Wire header name for the caller's display identity. See AgentNetworkProvider.identity_header_user_id. When omitted on a request, the stored value is left unchanged; pass an empty string explicitly to clear it (which disables stamping for this dimension).
 	IdentityHeaderUserId *string `json:"identity_header_user_id,omitempty"`
+
+	// MetadataDisabled Disable identity metadata injection (the caller's user + authorizing group) for this provider. Defaults to false (metadata is injected). When omitted on update, the stored value is left unchanged.
+	MetadataDisabled *bool `json:"metadata_disabled,omitempty"`
 
 	// Models Models exposed through this endpoint, with the operator's per-1k input/output prices. Empty means all catalog models are allowed at catalog prices.
 	Models *[]AgentNetworkProviderModel `json:"models,omitempty"`
@@ -3709,9 +3727,18 @@ type NetworkTrafficEvent struct {
 	Events []NetworkTrafficSubEvent `json:"events"`
 
 	// FlowId FlowID is the ID of the connection flow. Not unique because it can be the same for multiple events (e.g., start and end of the connection).
-	FlowId string               `json:"flow_id"`
-	Icmp   NetworkTrafficICMP   `json:"icmp"`
-	Policy NetworkTrafficPolicy `json:"policy"`
+	FlowId string             `json:"flow_id"`
+	Icmp   NetworkTrafficICMP `json:"icmp"`
+
+	// NumOfDrops Number of drop events.
+	NumOfDrops int `json:"num_of_drops"`
+
+	// NumOfEnds Number of end events.
+	NumOfEnds int `json:"num_of_ends"`
+
+	// NumOfStarts Number of start events.
+	NumOfStarts int                  `json:"num_of_starts"`
+	Policy      NetworkTrafficPolicy `json:"policy"`
 
 	// Protocol Protocol is the protocol of the traffic (e.g. 1 = ICMP, 6 = TCP, 17 = UDP, etc.).
 	Protocol int `json:"protocol"`
@@ -3732,6 +3759,12 @@ type NetworkTrafficEvent struct {
 	// TxPackets Number of packets transmitted.
 	TxPackets int                `json:"tx_packets"`
 	User      NetworkTrafficUser `json:"user"`
+
+	// WindowEnd Timestamp of the end of the aggregation window.
+	WindowEnd time.Time `json:"window_end"`
+
+	// WindowStart Timestamp of the start of the aggregation window.
+	WindowStart time.Time `json:"window_start"`
 }
 
 // NetworkTrafficEventsResponse defines model for NetworkTrafficEventsResponse.
@@ -5841,6 +5874,12 @@ type GetApiEventsNetworkTrafficParams struct {
 
 	// ReporterId Filter by reporter ID
 	ReporterId *string `form:"reporter_id,omitempty" json:"reporter_id,omitempty"`
+
+	// SourceId Filter by source endpoint ID
+	SourceId *string `form:"source_id,omitempty" json:"source_id,omitempty"`
+
+	// DestinationId Filter by destination endpoint ID
+	DestinationId *string `form:"destination_id,omitempty" json:"destination_id,omitempty"`
 
 	// Protocol Filter by protocol
 	Protocol *int `form:"protocol,omitempty" json:"protocol,omitempty"`
